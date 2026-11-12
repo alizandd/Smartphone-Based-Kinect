@@ -1,0 +1,25 @@
+# OS / editors
+.DS_Store
+.idea/
+*.iml
+.vscode/
+
+# Android / Gradle
+android/.gradle/
+android/**/build/
+android/local.properties
+android/app/src/main/assets/*.task
+android/.kotlin/
+
+# TV web app
+tv/node_modules/
+tv/dist/
+tv/*.wgt
+
+# Python tools
+tools/.venv/
+tools/**/__pycache__/
+tools/out/
+
+# Recorded sessions pulled from the phone
+sessions/

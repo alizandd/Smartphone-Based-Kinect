@@ -1,0 +1,7 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "fake-phone", "runtimeExecutable": "npm", "runtimeArgs": ["--prefix", "tv", "run", "fake-phone"], "port": 47800 },
+    { "name": "tv-receiver", "runtimeExecutable": "npm", "runtimeArgs": ["--prefix", "tv", "run", "dev"], "port": 8080 }
+  ]
+}

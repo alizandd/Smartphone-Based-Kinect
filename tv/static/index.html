@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MotionHub TV Receiver</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0d12; color: #e6e9ef; font-family: system-ui, sans-serif; overflow: hidden; }
+    canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #connect { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: #161a23; border: 1px solid #2c3343;
+      border-radius: 12px; padding: 28px 32px; min-width: 520px; box-shadow: 0 10px 40px #0008; }
+    #connect.hidden { display: none; }
+    #connect h1 { margin: 0 0 6px; font-size: 26px; }
+    #connect p { margin: 0 0 16px; color: #9aa3b5; font-size: 16px; }
+    #connect input { width: 100%; box-sizing: border-box; font-size: 24px; padding: 10px 12px; border-radius: 8px; border: 1px solid #3a4256; background: #0f1218; color: #fff; }
+    .row { display: flex; gap: 10px; margin-top: 14px; }
+    button { flex: 1; font-size: 20px; padding: 12px; border-radius: 8px; border: 2px solid transparent; background: #2b6cf6; color: #fff; }
+    button.secondary { background: #2a3040; }
+    button:focus { border-color: #ffd34d; outline: none; }
+    #status { margin-top: 14px; min-height: 22px; color: #ffd34d; font-size: 16px; }
+  </style>
+  <!-- Present only on Tizen; harmless 404 elsewhere. -->
+  <script src="$WEBAPIS/webapis/webapis.js"></script>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <div id="connect">
+    <h1>MotionHub · TV receiver</h1>
+    <p>Phone sensor address (shown on the phone's screen). Leave empty to search the network.</p>
+    <input id="ip" placeholder="192.168.1.42" inputmode="decimal" autocomplete="off">
+    <div class="row">
+      <button id="btnConnect">Connect</button>
+      <button id="btnScan" class="secondary">Search network</button>
+    </div>
+    <div id="status"></div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

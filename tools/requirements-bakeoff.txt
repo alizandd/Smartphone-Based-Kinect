@@ -1,0 +1,6 @@
+# Only for mhtools.bakeoff / sync_video (the reports need no packages). Use Python 3.10–3.12.
+mediapipe==0.10.14
+opencv-python==4.10.0.84
+rtmlib==0.0.13
+onnxruntime==1.19.2
+numpy<2
