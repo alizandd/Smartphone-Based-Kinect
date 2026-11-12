@@ -145,6 +145,13 @@ class MainActivity : AppCompatActivity(), EngineUi {
         add("delegate") { it.cycleDelegate() }
         add("height") { askHeight(it) }
         add("probe") { it.probeEnabled = !it.probeEnabled }
+        add("heat") { e ->
+            if (e.heatGuard) AlertDialog.Builder(this).setTitle("Turn heat guard off?")
+                .setMessage("Hands and face will run at full speed even when the phone is hot. Android may then slow down everything or stop the camera. For short tests only.")
+                .setPositiveButton("Turn off") { _, _ -> e.setHeatGuard(false); refreshButtons() }
+                .setNegativeButton("Cancel", null).show()
+            else e.setHeatGuard(true)
+        }
         add("background") { moveTaskToBack(true) }
         add("stop") {
             startService(Intent(this, SensorService::class.java).setAction(SensorService.ACTION_STOP))
@@ -166,6 +173,7 @@ class MainActivity : AppCompatActivity(), EngineUi {
         set("delegate", "Delegate: ${e?.delegateLabel() ?: "…"}")
         set("height", "Height: ${e?.statureCm ?: "…"} cm")
         set("probe", if (e?.probeEnabled == true) "Probe: ON" else "Probe: off")
+        set("heat", if (e?.heatGuard == false) "Heat guard: OFF" else "Heat guard: on")
         set("background", "Run in background")
         set("stop", "Stop sensor")
     }

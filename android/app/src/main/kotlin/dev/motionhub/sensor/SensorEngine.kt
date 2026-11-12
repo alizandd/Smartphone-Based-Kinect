@@ -71,8 +71,11 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
     private var wifiLock: WifiManager.WifiLock? = null
     private var wifiLockScreenOff: WifiManager.WifiLock? = null
 
-    // ---- thermal ladder (docs/07 §4): 0 normal, 1 warm, 2 hot ----
+    // ---- thermal ladder (docs/07 §4): 0 normal, 1 warm, 2 hot, 3 critical ----
     @Volatile var thermalLevel = 0; private set
+    /** Heat guard off = always full quality (testing only; the phone may throttle or shut the camera). */
+    @Volatile var heatGuard = true; private set
+    private var thermalTicks = 0
     private var coolSinceMs = 0L
     private var appliedResIndex = -1
     private var analyzeCounter = 0L
@@ -152,6 +155,7 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
         exposureIndex = prefs.getInt("exposure", 0)
         resIndex = prefs.getInt("res", 1)
         delegateIndex = prefs.getInt("delegate", 0)
+        heatGuard = prefs.getBoolean("heat_guard", true)
         pipeline.statureM = statureCm / 100.0
 
         server = MspServer(MspServer.PORT, { MspJson.welcome(sessionId, Build.MODEL, 60) }, ::onSocketText) { }
@@ -295,7 +299,7 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
         val crops = bitmapByCapture.remove(r.tCaptureUs)
         // Hands/face cost as much as the body model: run them on every 2nd frame (15 Hz), every
         // 3rd when the phone is warm, and pause them when it is hot.
-        val every = when (thermalLevel) { 0 -> 2L; 1 -> 3L; else -> 0L }
+        val every = handFaceEvery(thermalLevel)
         val sub = every > 0 && (poseCounter++ % every == 0L)
         if (sub && handsOn && f != null && crops != null) handTracker?.submit(crops, f)
         if (sub && faceOn && f != null && crops != null) faceTracker?.submit(crops, f)
@@ -588,8 +592,8 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
             appendLine("capture→result p50 ${fmt(captureToResultMs.p(0.5))} ms")
             appendLine("hands: ${if (handsOn && handSummary == "off") "on, no hands in view" else handSummary}")
             appendLine("face: ${if (faceOn && faceSummary == "off") "on, no face in view" else faceSummary}")
-            appendLine("exposure ${exposureLabel()}  iso $iso  thermal ${fmt(thermalHeadroom.toDouble())} (status $thermalStatus) " +
-                listOf("", "· WARM: reduced", "· HOT: 15 fps, hands/face paused")[thermalLevel])
+            appendLine("exposure ${exposureLabel()}  iso $iso  thermal ${fmt(thermalHeadroom.toDouble())} (status $thermalStatus) · " +
+                if (!heatGuard) "HEAT GUARD OFF" else thermalLabel(thermalLevel))
             appendLine("pitch ${fmt(pipeline.camera.pitchDeg)}°  roll ${fmt(pipeline.camera.rollDeg)}°  distance ${fmt(lastDistance)} m")
             appendLine(if (cal != null) "calibrated: h=${fmt(cal.cameraHeightM)} m" else lastStatus)
             append("last event: $lastEvent   ${if (recording) "● REC" else ""}")
@@ -598,7 +602,7 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
 
     /** One line for the notification. */
     fun statusLine(): String = "pose ${fmt(poseFps.rate)} fps · TV $clients · " +
-        listOf("temperature ok", "warm: reduced load", "hot: 15 fps, hands/face paused")[thermalLevel]
+        if (!heatGuard) "heat guard off" else thermalLabel(thermalLevel)
 
     private fun toast(msg: String) {
         val u = ui ?: return
@@ -614,15 +618,35 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
         thermalHeadroom = pm.getThermalHeadroom(10)
         thermalStatus = pm.currentThermalStatus
         updateThermalLevel()
+        // Repeat the state every 5 s so a TV that connects later knows why things are reduced.
+        if (++thermalTicks % 5 == 0 && ::server.isInitialized) server.broadcastText(thermalMessage())
+    }
+
+    fun setHeatGuard(on: Boolean) {
+        heatGuard = on
+        prefs.edit().putBoolean("heat_guard", on).apply()
+        if (!on) setThermalLevel(0) else updateThermalLevel()
+    }
+
+    /** Hands/face cadence: 15 Hz normal, 10 Hz warm, 5 Hz hot, paused only when critical. */
+    private fun handFaceEvery(level: Int) = when (level) { 0 -> 2L; 1 -> 3L; 2 -> 6L; else -> 0L }
+    private fun handFaceLabel(level: Int) = when (level) { 0 -> "15 Hz"; 1 -> "10 Hz"; 2 -> "5 Hz"; else -> "paused" }
+    private fun thermalLabel(level: Int) = when (level) {
+        0 -> "temperature ok"
+        1 -> "WARM: hands/face 10 Hz, max 960x720"
+        2 -> "HOT: 15 fps, hands/face 5 Hz, 640x480"
+        else -> "CRITICAL: 15 fps, hands/face paused"
     }
 
     /** Max resolution index per thermal level: hot → 640×480, warm → 960×720, normal → any. */
-    private fun resCapFor(level: Int) = when (level) { 2 -> 0; 1 -> 1; else -> resolutions.size - 1 }
+    private fun resCapFor(level: Int) = when (level) { 0 -> resolutions.size - 1; 1 -> 1; else -> 0 }
 
     /** Step up immediately when heating, step down one level after 15 s of cooler readings. */
     private fun updateThermalLevel() {
+        if (!heatGuard) return
         val h = thermalHeadroom
         val target = when {
+            thermalStatus >= PowerManager.THERMAL_STATUS_CRITICAL -> 3
             thermalStatus >= PowerManager.THERMAL_STATUS_SEVERE || (!h.isNaN() && h >= 0.95f) -> 2
             thermalStatus == PowerManager.THERMAL_STATUS_MODERATE || (!h.isNaN() && h >= 0.8f) -> 1
             else -> 0
@@ -647,16 +671,19 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
             camera.start(withVideo = camera.recordingEnabled) { toast(it) }
             main.postDelayed({ applyExposure() }, 800)
         }
-        val msg = MspJson.sensor("thermal", buildJsonObject {
-            put("level", level); put("status", thermalStatus); put("headroom", Math.round(thermalHeadroom * 100) / 100.0)
-            put("pose_fps_cap", if (level >= 2) 15 else 30)
-            put("hands_face", when (level) { 0 -> "15 Hz"; 1 -> "10 Hz"; else -> "paused" })
-            put("resolution", resLabelFor(res))
-        })
+        val msg = thermalMessage()
         if (::server.isInitialized) server.broadcastText(msg)
         logger.event(msg)
-        toast(when (level) { 2 -> "Phone is hot: tracking reduced (15 fps, hands/face paused)"; 1 -> "Phone is warm: reducing load"; else -> "Temperature normal again" })
+        toast(if (level == 0) "Temperature normal again" else "Phone is getting hot: ${thermalLabel(level)}")
     }
+
+    private fun thermalMessage() = MspJson.sensor("thermal", buildJsonObject {
+        put("level", thermalLevel); put("status", thermalStatus); put("headroom", Math.round(thermalHeadroom * 100) / 100.0)
+        put("heat_guard", heatGuard)
+        put("pose_fps_cap", if (thermalLevel >= 2) 15 else 30)
+        put("hands_face", handFaceLabel(thermalLevel))
+        put("resolution", resLabelFor(if (appliedResIndex >= 0) appliedResIndex else resIndex))
+    })
 
     private fun resLabelFor(i: Int) = resolutions[i].let { "${it.width}x${it.height}" }
 

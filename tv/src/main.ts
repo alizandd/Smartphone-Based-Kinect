@@ -28,6 +28,7 @@ const captureToReceiveMs = new Rolling(600);
 const captureToRenderMs = new Rolling(600);
 const eventLatencyMs = new Rolling(100);
 let probeLatencyMs = NaN;
+let thermal: { level?: number; hands_face?: string; resolution?: string; heat_guard?: boolean } = {};
 const stats = new Map<number, number[]>();       // frameSeq → [seq, tCapture, rxPhone, renderPhone]
 const hud: HudState = { lines: [], events: [], setup: '', flashUntil: 0, cameraDistanceM: 2.5, hands: null, handsAt: 0, face: null, faceAt: 0, body: null, bodyAt: 0 };
 const faceRate = new RateMeter();
@@ -65,12 +66,16 @@ const conn = new MspConnection({
         break;
       }
       case 'sensor': {
-        const m = msg as unknown as { event: string; detail?: { level?: number; hands_face?: string; resolution?: string } };
+        const m = msg as unknown as { event: string; detail?: typeof thermal };
         if (m.event === 'thermal' && m.detail) {
+          thermal = m.detail;
           const lvl = m.detail.level ?? 0;
-          hud.setup = lvl === 0 ? '' : lvl === 1
-            ? `Phone is warm: load reduced (hands/face ${m.detail.hands_face}, ${m.detail.resolution})`
-            : 'Phone is HOT: tracking reduced to 15 fps, hands/face paused. Let it cool or add a fan.';
+          const msgs = ['', `Phone warm: hands/face ${m.detail.hands_face}, ${m.detail.resolution}`,
+            `Phone HOT: body 15 fps, hands/face ${m.detail.hands_face}, ${m.detail.resolution}`,
+            'Phone CRITICAL: hands/face paused. Let it cool (no charger, no case) or add a fan.'];
+          const PREFIX = 'Phone ';
+          if (lvl > 0) hud.setup = msgs[Math.min(lvl, 3)];
+          else if (hud.setup.startsWith(PREFIX)) hud.setup = '';
         }
         break;
       }
@@ -150,6 +155,11 @@ function frame(): void {
   requestAnimationFrame(frame);
 }
 
+function thermalNote(): string {
+  if (thermal.heat_guard === false) return ' (heat guard off)';
+  return (thermal.level ?? 0) > 0 ? ` (phone ${['', 'warm', 'hot', 'critical'][Math.min(thermal.level ?? 0, 3)]}: ${thermal.hands_face})` : '';
+}
+
 function fmt(v: number, d = 1): string { return isFinite(v) ? v.toFixed(d) : '–'; }
 
 function updateHudLines(): void {
@@ -165,8 +175,8 @@ function updateHudLines(): void {
     p && p.head ? `head yaw ${p.head.yawDeg.toFixed(0)}° pitch ${p.head.pitchDeg.toFixed(0)}° roll ${p.head.rollDeg.toFixed(0)}°` : 'head –',
     p ? `root x ${(p.rootMm[0] / 1000).toFixed(2)} z ${(p.rootMm[2] / 1000).toFixed(2)} m` : '',
     `send delay on phone ${latest ? fmt(latest.sendDelayUs / 1000) : '–'} ms`,
-    hud.hands ? `hands ${handsRate.rate} fps · age p50 ${fmt(handsAgeMs.p(0.5))} ms` : 'hands off (enable on phone)',
-    hud.face ? `face ${faceRate.rate} fps · ${hud.face.found ? hud.face.expression : 'not found'}` : 'face off (enable on phone)',
+    hud.hands ? `hands ${handsRate.rate} fps · age p50 ${fmt(handsAgeMs.p(0.5))} ms${thermalNote()}` : `hands: none received${thermalNote()}`,
+    hud.face ? `face ${faceRate.rate} fps · ${hud.face.found ? hud.face.expression : 'not found'}${thermalNote()}` : `face: none received${thermalNote()}`,
     'keys: C/red = calibrate · Back = reconnect panel',
   ];
   void latestReceiveUs;
