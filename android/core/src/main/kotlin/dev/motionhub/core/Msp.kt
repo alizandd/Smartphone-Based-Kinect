@@ -142,6 +142,7 @@ object MspJson {
         putJsonObject("parts") { s.parts.forEach { (k, v) -> put(k, v) } }
         if (!pitchDeg.isNaN()) put("pitch_deg", Math.round(pitchDeg).toInt())
         if (!rollDeg.isNaN()) put("roll_deg", Math.round(rollDeg).toInt())
+        s.motion?.let { put("motion", Math.round(it * 100) / 100.0) }
     }.toString()
 
     fun calibrationDone(c: CalibrationResult): String = buildJsonObject {

@@ -101,6 +101,8 @@ class Calibrator(private val cam: CameraModel, val statureM: Double, private val
         val hint: String,
         /** What the camera sees: head, shoulders, hips, knees, feet. */
         val parts: Map<String, Boolean> = emptyMap(),
+        /** Head/torso movement over the last 20 frames relative to the allowed amount (≤1 = still). */
+        val motion: Double? = null,
     )
 
     private class Samples {
@@ -131,9 +133,11 @@ class Calibrator(private val cam: CameraModel, val statureM: Double, private val
 
         // 1. Phone placement (gravity sensor). The solvers use the measured pitch/roll, so only
         //    extreme angles block; a moderate tilt just produces advice further down.
-        if (kotlin.math.abs(cam.rollDeg) > 20) return vis("level_phone")
+        // Pitch first: when the phone lies flat (pitch ≈ ±90°) the roll reading is meaningless.
         if (cam.pitchDeg > 45) return vis("tilt_down")
         if (cam.pitchDeg < -50) return vis("tilt_up")
+        if (kotlin.math.abs(cam.rollDeg) > 60) return vis("turn_landscape")   // held upright (portrait)
+        if (kotlin.math.abs(cam.rollDeg) > 20) return vis("level_phone")
         // 2. Is someone there, facing the camera?
         if (f.keyJointsVisible() < 4) return vis("nobody_in_view")
         val eye = f.meanPx(BP.LEFT_EYE, BP.RIGHT_EYE)
@@ -142,12 +146,12 @@ class Calibrator(private val cam: CameraModel, val statureM: Double, private val
         val upperBody = parts.getValue("hips")
         if (!fullBody && !upperBody) return vis("step_back")
 
-        // 3. Stillness: key points move less than 1.5% of the body's pixel size over 20 frames.
+        // 3. Stillness of the head and torso (hands may move: people gesture, hold things) — key
+        //    points move less than 1.5% of the body's pixel size over 20 frames.
         val sh = f.meanPx(BP.LEFT_SHOULDER, BP.RIGHT_SHOULDER)!!
         val hp = f.meanPx(BP.LEFT_HIP, BP.RIGHT_HIP)!!
         val sizePx = max(1.0, kotlin.math.hypot(hp.first - sh.first, hp.second - sh.second) * (if (fullBody) 3.5 else 1.0))
-        val probe = doubleArrayOf(f.u(BP.LEFT_WRIST), f.v(BP.LEFT_WRIST), f.u(BP.RIGHT_WRIST), f.v(BP.RIGHT_WRIST),
-            sh.first, sh.second, hp.first, hp.second, eye.first, eye.second)
+        val probe = doubleArrayOf(sh.first, sh.second, hp.first, hp.second, eye.first, eye.second)
         window.addLast(probe)
         if (window.size > 20) window.removeFirst()
         val hintMoving = when {
@@ -162,7 +166,8 @@ class Calibrator(private val cam: CameraModel, val statureM: Double, private val
             for (s in window) { lo = minOf(lo, s[k]); hi = maxOf(hi, s[k]) }
             maxRange = max(maxRange, hi - lo)
         }
-        if (maxRange > 0.015 * sizePx * (if (fullBody) 1.0 else 3.0)) return Status(Stage.STAND_STILL, progress(), hintMoving, parts)
+        val motion = maxRange / (0.015 * sizePx * (if (fullBody) 1.0 else 3.0))
+        if (motion > 1.0) return Status(Stage.STAND_STILL, progress(), hintMoving, parts, motion)
 
         // 4. Solve and collect.
         if (fullBody) {
@@ -172,7 +177,7 @@ class Calibrator(private val cam: CameraModel, val statureM: Double, private val
             full.add(sol, torsoPx(f))
         } else {
             val sol = UpperBodySolver.solve(cam, f, statureM)
-                ?: return Status(Stage.STAND_STILL, progress(), "check_phone_angle", parts)
+                ?: return Status(Stage.STAND_STILL, progress(), "check_phone_angle", parts, motion)
             upper.add(sol, torsoPx(f))
         }
         val done = when {
@@ -191,7 +196,7 @@ class Calibrator(private val cam: CameraModel, val statureM: Double, private val
             )
             return Status(Stage.DONE, 1.0, if (partial) "done_without_feet" else "done", parts)
         }
-        return Status(Stage.STAND_STILL, progress(), hintMoving, parts)
+        return Status(Stage.STAND_STILL, progress(), hintMoving, parts, motion)
     }
 
     private fun progress() = max(full.d.size.toDouble() / samplesNeeded, upper.d.size.toDouble() / (samplesNeeded * 3 / 2)).coerceAtMost(1.0)

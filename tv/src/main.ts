@@ -126,7 +126,8 @@ function hint(code: string, s?: SetupStatusMsg): string {
   const roll = s?.roll_deg !== undefined ? ` (now ${s.roll_deg}°)` : '';
   const map: Record<string, string> = {
     tilt_down: `the phone points at the ceiling: tilt it down${tilt}`,
-    tilt_up: `the phone points at the floor: tilt it up${tilt}`,
+    tilt_up: `the phone points at the floor (lying flat?): stand it up facing you${tilt}`,
+    turn_landscape: `the phone is upright (portrait): turn it horizontal, back camera facing you${roll}`,
     level_phone: `the phone is tilted sideways: level it${roll}`,
     nobody_in_view: 'nobody in view: stand in front of the camera, about 2 m away',
     face_camera: 'face the camera with head and shoulders visible',

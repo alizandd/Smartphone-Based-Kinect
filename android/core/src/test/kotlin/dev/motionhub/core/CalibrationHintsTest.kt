@@ -26,6 +26,8 @@ class CalibrationHintsTest {
         assertEquals("tilt_down", firstHint(cameraAt(50.0), person).hint)
         assertEquals("tilt_up", firstHint(cameraAt(-60.0), person).hint)
         assertEquals("level_phone", firstHint(cameraAt(-8.0, 25.0), person).hint)
+        assertEquals("tilt_up", firstHint(cameraAt(-89.0, -33.0), person).hint)   // lying flat on a table
+        assertEquals("turn_landscape", firstHint(cameraAt(-5.0, 85.0), person).hint)  // held in portrait
         val empty = PoseFrame.empty(0, Synthetic.W, Synthetic.H)
         assertEquals("nobody_in_view", Calibrator(cameraAt(-8.0), 1.75).update(empty).hint)
         val upperOnly = person.filterKeys { it !in lower }
@@ -68,5 +70,21 @@ class CalibrationHintsTest {
         assertTrue("tilt_down_for_feet" in hints, hints.toString())
         assertEquals(Calibrator.Stage.DONE, status!!.stage)
         assertEquals(2.0, assertNotNull(cal.result).distanceM, 0.15)
+    }
+
+    @Test
+    fun `waving hands does not block calibration`() {
+        val cam = Synthetic.camera(-8.0)
+        val base = Synthetic.standing(1.75, 0.0, 2.5)
+        val cal = Calibrator(cam, 1.75)
+        var status: Calibrator.Status? = null
+        for (i in 0 until 300) {
+            val wave = 0.25 * kotlin.math.sin(i * 0.7)
+            val person = base.toMutableMap()
+            for (w in listOf(BP.LEFT_WRIST, BP.RIGHT_WRIST)) base[w]?.let { person[w] = Vec3(it.x + wave, it.y + wave, it.z) }
+            status = cal.update(Synthetic.frame(cam, person, i * 33_333L))
+            if (status.stage == Calibrator.Stage.DONE) break
+        }
+        assertEquals(Calibrator.Stage.DONE, status!!.stage)
     }
 }

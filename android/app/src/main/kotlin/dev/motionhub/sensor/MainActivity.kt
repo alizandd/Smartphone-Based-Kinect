@@ -66,6 +66,9 @@ class MainActivity : AppCompatActivity(), EngineUi {
         // The sensor screen stays on while the app is open; it dims itself after 30 s without a
         // touch (less heat), and a touch brightens it again.
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // A sensor on a tripod: come back on screen (over the lock screen) after a restart.
+        setShowWhenLocked(true)
+        setTurnScreenOn(true)
         setContentView(R.layout.activity_main)
         scheduleDim()
         previewView = findViewById<PreviewView>(R.id.preview).apply { scaleType = PreviewView.ScaleType.FIT_CENTER }
