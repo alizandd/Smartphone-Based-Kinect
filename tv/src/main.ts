@@ -131,6 +131,7 @@ function hint(code: string, s?: SetupStatusMsg): string {
     nobody_in_view: 'nobody in view: stand in front of the camera, about 2 m away',
     face_camera: 'face the camera with head and shoulders visible',
     step_back: 'step back until your whole body is visible',
+    tilt_down_for_feet: `stand still (upper body) · tilt phone down for feet${tilt}`,
     feet_not_visible: 'feet not visible: step back, or stand still to calibrate without feet',
     full_body_not_visible: 'make sure your whole body is visible',
     stand_still: 'stand still, arms relaxed',

@@ -23,9 +23,9 @@ class CalibrationHintsTest {
     @Test
     fun `hints say what is wrong with the phone or the player`() {
         val person = Synthetic.standing(1.75, 0.0, 2.5)
-        assertEquals("tilt_down", firstHint(cameraAt(35.0), person).hint)
+        assertEquals("tilt_down", firstHint(cameraAt(50.0), person).hint)
         assertEquals("tilt_up", firstHint(cameraAt(-60.0), person).hint)
-        assertEquals("level_phone", firstHint(cameraAt(-8.0, 20.0), person).hint)
+        assertEquals("level_phone", firstHint(cameraAt(-8.0, 25.0), person).hint)
         val empty = PoseFrame.empty(0, Synthetic.W, Synthetic.H)
         assertEquals("nobody_in_view", Calibrator(cameraAt(-8.0), 1.75).update(empty).hint)
         val upperOnly = person.filterKeys { it !in lower }
@@ -51,5 +51,22 @@ class CalibrationHintsTest {
         assertEquals(2.6, r.distanceM, 0.1)
         assertEquals(1.0, r.cameraHeightM, 0.1)
         assertEquals(0.2, r.originG.x, 0.1)
+    }
+
+    @Test
+    fun `phone tilted up 26 degrees still calibrates from the upper body`() {
+        val cam = cameraAt(26.0)
+        val person = Synthetic.standing(1.75, 0.0, 2.0).filterKeys { it !in lower }
+        val cal = Calibrator(cam, 1.75)
+        var status: Calibrator.Status? = null
+        val hints = mutableSetOf<String>()
+        for (i in 0 until 300) {
+            status = cal.update(Synthetic.frame(cam, person, i * 33_333L))
+            hints += status.hint
+            if (status.stage == Calibrator.Stage.DONE) break
+        }
+        assertTrue("tilt_down_for_feet" in hints, hints.toString())
+        assertEquals(Calibrator.Stage.DONE, status!!.stage)
+        assertEquals(2.0, assertNotNull(cal.result).distanceM, 0.15)
     }
 }

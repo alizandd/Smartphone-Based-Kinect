@@ -129,10 +129,11 @@ class Calibrator(private val cam: CameraModel, val statureM: Double, private val
         )
         fun vis(hint: String) = Status(Stage.VISIBILITY, progress(), hint, parts).also { window.clear() }
 
-        // 1. Phone placement (measured by the gravity sensor).
-        if (kotlin.math.abs(cam.rollDeg) > 12) return vis("level_phone")
-        if (cam.pitchDeg > 25) return vis("tilt_down")
-        if (cam.pitchDeg < -40) return vis("tilt_up")
+        // 1. Phone placement (gravity sensor). The solvers use the measured pitch/roll, so only
+        //    extreme angles block; a moderate tilt just produces advice further down.
+        if (kotlin.math.abs(cam.rollDeg) > 20) return vis("level_phone")
+        if (cam.pitchDeg > 45) return vis("tilt_down")
+        if (cam.pitchDeg < -50) return vis("tilt_up")
         // 2. Is someone there, facing the camera?
         if (f.keyJointsVisible() < 4) return vis("nobody_in_view")
         val eye = f.meanPx(BP.LEFT_EYE, BP.RIGHT_EYE)
@@ -149,7 +150,11 @@ class Calibrator(private val cam: CameraModel, val statureM: Double, private val
             sh.first, sh.second, hp.first, hp.second, eye.first, eye.second)
         window.addLast(probe)
         if (window.size > 20) window.removeFirst()
-        val hintMoving = if (fullBody) "stand_still" else "feet_not_visible"
+        val hintMoving = when {
+            fullBody -> "stand_still"
+            cam.pitchDeg > 15 -> "tilt_down_for_feet"     // feet cut off because the phone looks up
+            else -> "feet_not_visible"
+        }
         if (window.size < 20) return Status(Stage.STAND_STILL, progress(), hintMoving, parts)
         var maxRange = 0.0
         for (k in probe.indices) {
