@@ -263,7 +263,10 @@ try {
   let saved: string | null = null;
   try { saved = localStorage.getItem('mh.phone'); } catch { /* ignore */ }
   const fromHost = hostPhones();
-  if (phone) connectTo(phone);
+  if (phone) {
+    const m = /^(.*):(\d+)$/.exec(phone);   // "host" or "host:port"
+    if (m) connectTo(m[1], Number(m[2])); else connectTo(phone);
+  }
   else if (fromHost.length) connectTo(fromHost[0].host, fromHost[0].port);
   else if (saved) {
     const m = /^ws:\/\/([^:/]+):(\d+)/.exec(saved);

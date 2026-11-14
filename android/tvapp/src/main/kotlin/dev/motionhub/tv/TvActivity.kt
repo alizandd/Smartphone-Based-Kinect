@@ -68,7 +68,10 @@ class TvActivity : Activity() {
         WebView.setWebContentsDebuggingEnabled(true)   // chrome://inspect for Phase 0 profiling
         // Optional fixed sensor address (adb: --es phone 172.16.10.47), e.g. for the USB bridge
         // on networks with Wi-Fi client isolation.
-        val phone = intent?.getStringExtra("phone")?.takeIf { it.matches(Regex("[0-9a-zA-Z.:-]+")) }
+        // --es link bluetooth: skip Wi-Fi and use the Bluetooth link straight away.
+        val forceBt = intent?.getStringExtra("link") == "bluetooth"
+        val phone = (if (forceBt) "127.0.0.1:${BtLink.LOCAL_PORT}" else intent?.getStringExtra("phone"))
+            ?.takeIf { it.matches(Regex("[0-9a-zA-Z.:-]+")) }
         web.loadUrl("http://appassets.androidplatform.net/assets/web/index.html" + (phone?.let { "?phone=$it" } ?: ""))
         web.requestFocus()
 
@@ -78,12 +81,12 @@ class TvActivity : Activity() {
             wifiLock = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "motionhub").apply { acquire() }
         }
         nsd = getSystemService(Context.NSD_SERVICE) as NsdManager
-        nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discovery)
+        if (!forceBt) nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discovery)
 
         // Bluetooth fallback: if no phone is reachable over Wi-Fi within 6 s, connect over Bluetooth.
         val btPerms = arrayOf(android.Manifest.permission.BLUETOOTH_SCAN, android.Manifest.permission.BLUETOOTH_CONNECT)
         if (btPerms.any { checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED }) requestPermissions(btPerms, 1)
-        main.postDelayed({ if (!wifiReachable) startBluetooth() }, 6000)
+        main.postDelayed({ if (!wifiReachable) startBluetooth() }, if (forceBt) 0L else 6000L)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
