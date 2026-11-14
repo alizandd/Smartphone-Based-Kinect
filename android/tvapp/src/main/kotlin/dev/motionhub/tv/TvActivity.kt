@@ -63,7 +63,10 @@ class TvActivity : Activity() {
         }
         setContentView(web)
         WebView.setWebContentsDebuggingEnabled(true)   // chrome://inspect for Phase 0 profiling
-        web.loadUrl("http://appassets.androidplatform.net/assets/web/index.html")
+        // Optional fixed sensor address (adb: --es phone 172.16.10.47), e.g. for the USB bridge
+        // on networks with Wi-Fi client isolation.
+        val phone = intent?.getStringExtra("phone")?.takeIf { it.matches(Regex("[0-9a-zA-Z.:-]+")) }
+        web.loadUrl("http://appassets.androidplatform.net/assets/web/index.html" + (phone?.let { "?phone=$it" } ?: ""))
         web.requestFocus()
 
         val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager

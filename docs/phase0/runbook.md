@@ -52,6 +52,20 @@ Without a TV: `npm run dev` in `tv/`, open `http://localhost:8080/?phone=<phone-
 5. Press **red** (or Menu) on the TV remote, or **Calibrate** on the phone. The player stands still, whole body visible, until the TV shows "Calibrated ✓".
 6. Tap **Dim screen** on the phone for long runs.
 
+**Wi-Fi with client isolation** (the TV finds the phone but cannot connect, and the phone does not answer a ping): connect the phone to the Mac by USB and bridge it:
+
+```bash
+adb -s <phone-usb-serial> forward tcp:47800 tcp:47800
+```
+
+```bash
+python3 tools/usb_bridge.py --listen <mac-lan-ip>
+```
+
+```bash
+adb -s <tv-ip>:5555 shell am start -S -n dev.motionhub.tv/.TvActivity --es phone <mac-lan-ip>
+```
+
 Phone controls: `Exposure` cycles AUTO → 8 ms → 4 ms → 2 ms (fixed exposure with automatic ISO), `Model` cycles lite → full → heavy, `Probe` enables flash detection, `Record` saves video + landmarks + IMU.
 
 ## 3. Sessions and files
