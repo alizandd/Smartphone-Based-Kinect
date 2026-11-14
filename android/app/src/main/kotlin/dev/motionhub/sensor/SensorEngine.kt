@@ -66,7 +66,41 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
 
     private lateinit var camera: CameraController
     private val logger = SessionLogger(ctx)
-    private lateinit var server: MspServer
+    @Volatile private lateinit var server: MspServer
+    private val healthExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
+    private var healthFailures = 0
+
+    private fun newServer() = MspServer(MspServer.PORT, { MspJson.welcome(sessionId, Build.MODEL, 60) }, ::onSocketText, { },
+        onFatal = { e -> android.util.Log.w("SensorEngine", "server failed, restarting", e); healthExecutor.execute { restartServer("fatal: ${e.javaClass.simpleName}") } })
+
+    /**
+     * Self-check: open a WebSocket handshake to our own port. If the server's selector thread has
+     * died (the OS still accepts connections but nobody answers), restart the server.
+     */
+    private fun checkServerHealth() {
+        if (!started) return
+        val ok = runCatching {
+            java.net.Socket().use { s ->
+                s.connect(java.net.InetSocketAddress("127.0.0.1", MspServer.PORT), 1000)
+                s.soTimeout = 2000
+                s.getOutputStream().write(("GET ${MspServer.PATH}?probe=1 HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n" +
+                    "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n").toByteArray())
+                s.getInputStream().bufferedReader().readLine()?.startsWith("HTTP/1.1 101") == true
+            }
+        }.getOrDefault(false)
+        if (ok) { healthFailures = 0; return }
+        if (++healthFailures >= 2) { healthFailures = 0; restartServer("health check failed") }
+    }
+
+    @Synchronized private fun restartServer(reason: String) {
+        if (!started) return
+        android.util.Log.w("SensorEngine", "restarting WebSocket server: $reason")
+        healthExecutor.shutdownNow()
+        runCatching { server.stop(500) }
+        server = newServer()
+        runCatching { server.start() }
+        logger.event(MspJson.sensor("server_restarted", buildJsonObject { put("reason", reason) }))
+    }
     private val nsd = NsdAdvertiser(ctx)
     private var wifiLock: WifiManager.WifiLock? = null
     private var wifiLockScreenOff: WifiManager.WifiLock? = null
@@ -158,8 +192,9 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
         heatGuard = prefs.getBoolean("heat_guard", true)
         pipeline.statureM = statureCm / 100.0
 
-        server = MspServer(MspServer.PORT, { MspJson.welcome(sessionId, Build.MODEL, 60) }, ::onSocketText) { }
+        server = newServer()
         server.start()
+        healthExecutor.scheduleWithFixedDelay({ checkServerHealth() }, 5, 5, java.util.concurrent.TimeUnit.SECONDS)
         nsd.register(MspServer.PORT)
         val wifi = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         wifiLock = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "motionhub").apply { acquire() }

@@ -66,6 +66,10 @@ export class MspConnection {
     const ws = new WebSocket(this.url);
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
+    // Never hang in CONNECTING (e.g. the sensor's server accepts TCP but does not answer).
+    const handshakeTimer = setTimeout(() => { if (ws.readyState === WebSocket.CONNECTING) ws.close(); }, 5000);
+    ws.addEventListener('open', () => clearTimeout(handshakeTimer));
+    ws.addEventListener('close', () => clearTimeout(handshakeTimer));
     ws.onopen = () => {
       this.backoffMs = 250;
       this.ev.onState('connected', this.url);

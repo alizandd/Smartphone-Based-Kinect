@@ -20,6 +20,8 @@ class MspServer(
     private val onWelcome: () -> String,
     private val onText: (WebSocket, String) -> Unit,
     private val onClients: (Int) -> Unit,
+    /** Server-level failure (the selector thread is gone): the owner should replace this server. */
+    private val onFatal: (Exception) -> Unit = {},
 ) : WebSocketServer(InetSocketAddress(port)) {
 
     init {
@@ -38,7 +40,10 @@ class MspServer(
 
     override fun onClose(conn: WebSocket, code: Int, reason: String?, remote: Boolean) = onClients(connections.size)
     override fun onMessage(conn: WebSocket, message: String) = onText(conn, message)
-    override fun onError(conn: WebSocket?, ex: Exception) { Log.w(TAG, "socket error", ex) }
+    override fun onError(conn: WebSocket?, ex: Exception) {
+        Log.w(TAG, "socket error (conn=${conn != null})", ex)
+        if (conn == null) onFatal(ex)          // a null connection means the server itself failed
+    }
     override fun onStart() { Log.i(TAG, "listening on ${address.port}") }
 
     fun broadcastFrame(bytes: ByteArray): Int {
