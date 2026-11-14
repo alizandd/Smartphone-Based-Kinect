@@ -27,6 +27,9 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
     private val weak = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(140, 255, 200, 60); strokeWidth = 4f }
     private val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
 
+    /** The front-camera preview is mirrored on screen; mirror the drawing to match. */
+    @Volatile var mirrored = false
+
     fun update(px: FloatArray?, vis: FloatArray?, w: Int, h: Int) {
         this.px = px; this.vis = vis; imgW = w; imgH = h
         postInvalidate()
@@ -38,16 +41,17 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
         val scale = minOf(width.toFloat() / imgW, height.toFloat() / imgH)
         val ox = (width - imgW * scale) / 2
         val oy = (height - imgH * scale) / 2
-        fun x(i: Int) = ox + p[2 * i] * scale
+        fun mx(v: Float) = if (mirrored) imgW - v else v
+        fun x(i: Int) = ox + mx(p[2 * i]) * scale
         fun y(i: Int) = oy + p[2 * i + 1] * scale
         for ((a, b) in BONES) {
             if (p[2 * a].isNaN() || p[2 * b].isNaN()) continue
             canvas.drawLine(x(a), y(a), x(b), y(b), if (minOf(v[a], v[b]) >= 0.5f) bone else weak)
         }
         for (i in 0 until BP.COUNT) if (!p[2 * i].isNaN() && v[i] >= 0.5f) canvas.drawCircle(x(i), y(i), 5f, dot)
-        face?.let { fp -> for (k in 0 until fp.size / 2) canvas.drawCircle(ox + fp[2 * k] * scale, oy + fp[2 * k + 1] * scale, 3f, facePaint) }
+        face?.let { fp -> for (k in 0 until fp.size / 2) canvas.drawCircle(ox + mx(fp[2 * k]) * scale, oy + fp[2 * k + 1] * scale, 3f, facePaint) }
         for (h in hands) {
-            fun hx(i: Int) = ox + h[3 * i] * scale
+            fun hx(i: Int) = ox + mx(h[3 * i]) * scale
             fun hy(i: Int) = oy + h[3 * i + 1] * scale
             for ((a, b) in dev.motionhub.core.HL.BONES) canvas.drawLine(hx(a), hy(a), hx(b), hy(b), finger)
         }

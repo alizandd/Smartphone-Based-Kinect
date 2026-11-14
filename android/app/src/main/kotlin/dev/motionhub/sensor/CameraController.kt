@@ -56,6 +56,8 @@ class CameraController(
     var analysisSize: Size = Size(960, 720)
     /** Bind the on-screen preview stream (only when a [surfaceProvider] is attached). */
     var previewEnabled = true
+    /** Rear (default) or front/selfie camera; set before [start]. */
+    var frontCamera = false
 
     /** Static facts about the camera, written to meta.json. */
     data class Info(
@@ -164,10 +166,10 @@ class CameraController(
             val vc = vcBuilder.build()
             videoCapture = vc
             videoUseCase = vc
-            provider.bindToLifecycle(owner, CameraSelector.Builder().requireLensFacing(CameraSelector.LENS_FACING_BACK).build(),
+            provider.bindToLifecycle(owner, selector(),
                 *(streams + vc).toTypedArray()).also { recordingEnabled = true }
         } else {
-            provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, *streams.toTypedArray())
+            provider.bindToLifecycle(owner, selector(), *streams.toTypedArray())
         }
     }
 
@@ -202,6 +204,9 @@ class CameraController(
         Camera2CameraControl.from(cam.cameraControl).setCaptureRequestOptions(b.build())
     }
 
+    private fun selector() = CameraSelector.Builder()
+        .requireLensFacing(if (frontCamera) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK).build()
+
     fun startRecording(file: File, onEvent: (String) -> Unit): Boolean {
         val vc = videoCapture ?: return false
         recording = vc.output.prepareRecording(context, FileOutputOptions.Builder(file).build())
@@ -220,9 +225,8 @@ class CameraController(
 
     private fun readInfo(): Info {
         val mgr = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        val id = mgr.cameraIdList.first {
-            mgr.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
-        }
+        val facing = if (frontCamera) CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
+        val id = mgr.cameraIdList.first { mgr.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == facing }
         val c = mgr.getCameraCharacteristics(id)
         val ranges = c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)?.toList().orEmpty()
         val fps = if (ranges.any { it.lower == 60 && it.upper == 60 }) 60 else 30

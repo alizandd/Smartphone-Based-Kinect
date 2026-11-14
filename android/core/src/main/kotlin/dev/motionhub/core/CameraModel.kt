@@ -42,11 +42,12 @@ class CameraModel {
      * The phone is used in landscape with the rear camera (looking along device −z) and the image
      * rotated upright, so the image's up axis is whichever of device ±x points up.
      */
-    fun setGravityDevice(ax: Double, ay: Double, az: Double) {
+    fun setGravityDevice(ax: Double, ay: Double, az: Double, frontCamera: Boolean = false) {
         val up = Vec3(ax, ay, az).normalized()
         val imageUp = Vec3(if (up.x >= 0) 1.0 else -1.0, 0.0, 0.0)
         val yC = -imageUp                 // image down, in device coordinates
-        val zC = Vec3(0.0, 0.0, -1.0)     // optical axis of the rear camera
+        // Optical axis: rear camera looks along device −z, the front (selfie) camera along +z.
+        val zC = Vec3(0.0, 0.0, if (frontCamera) 1.0 else -1.0)
         val xC = yC cross zC              // image right
         setUpCamera(Vec3(up dot xC, up dot yC, up dot zC))
     }

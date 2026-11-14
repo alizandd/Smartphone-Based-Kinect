@@ -143,9 +143,16 @@ export class Renderer {
   /** Zoomed finger view per hand (mirror layout: the player's right hand on the right). */
   private drawHands(hud: HudState, now: number): void {
     const h = hud.hands;
-    if (!h || now - hud.handsAt > 500) return;
     const c = this.ctx;
     const size = 230, y0 = 760;
+    if (h && now - hud.handsAt <= 500 && h.hands.length === 0) {
+      // Hand tracking is on but no hand found: say so instead of showing nothing.
+      c.fillStyle = 'rgba(18, 22, 32, 0.92)'; c.fillRect(60, y0, 2 * size + 30, 70);
+      c.fillStyle = '#ffb84d'; c.font = '22px system-ui, sans-serif';
+      c.fillText('Hands: none detected. Raise your hands toward the camera.', 76, y0 + 43);
+      return;
+    }
+    if (!h || now - hud.handsAt > 500) return;
     for (const hand of h.hands) {
       // mirror view: player's left hand on the screen's left
       const x0 = hand.side === 'l' ? 60 : 60 + size + 30;

@@ -137,7 +137,10 @@ class MainActivity : AppCompatActivity(), EngineUi {
 
     // ------------------------------------------------------------------ EngineUi
 
-    override fun onPose(px: FloatArray?, vis: FloatArray?, w: Int, h: Int) = overlay.update(px, vis, w, h)
+    override fun onPose(px: FloatArray?, vis: FloatArray?, w: Int, h: Int) {
+        overlay.mirrored = engine?.frontCamera == true
+        overlay.update(px, vis, w, h)
+    }
     override fun onHands(points: List<FloatArray>) = overlay.updateHands(points)
     override fun onFace(points: FloatArray?) = overlay.updateFace(points)
     override fun toast(msg: String) { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
@@ -153,6 +156,7 @@ class MainActivity : AppCompatActivity(), EngineUi {
                 col.addView(this)
             }
         }
+        add("camera") { it.toggleCamera() }
         add("calibrate") { it.startCalibration() }
         add("record") { it.toggleRecording() }
         add("exposure") { it.cycleExposure() }
@@ -187,6 +191,7 @@ class MainActivity : AppCompatActivity(), EngineUi {
     private fun refreshButtons() {
         val e = engine
         fun set(key: String, text: String) { buttons[key]?.text = text }
+        set("camera", if (e?.frontCamera == true) "Camera: FRONT (faces you)" else "Camera: back")
         set("calibrate", "Calibrate")
         set("record", if (e?.recording == true) "Record: ON" else "Record: off")
         set("exposure", "Exposure: ${e?.exposureLabel() ?: "…"}")

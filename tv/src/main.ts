@@ -28,7 +28,7 @@ const captureToReceiveMs = new Rolling(600);
 const captureToRenderMs = new Rolling(600);
 const eventLatencyMs = new Rolling(100);
 let probeLatencyMs = NaN;
-let thermal: { level?: number; hands_face?: string; resolution?: string; heat_guard?: boolean } = {};
+let thermal: { level?: number; hands_face?: string; resolution?: string; heat_guard?: boolean; hands_on?: boolean; face_on?: boolean } = {};
 const stats = new Map<number, number[]>();       // frameSeq → [seq, tCapture, rxPhone, renderPhone]
 const hud: HudState = { lines: [], events: [], setup: '', flashUntil: 0, cameraDistanceM: 2.5, hands: null, handsAt: 0, face: null, faceAt: 0, body: null, bodyAt: 0 };
 const faceRate = new RateMeter();
@@ -105,13 +105,15 @@ const conn = new MspConnection({
       }
       case 'setup_status': {
         const s = msg as SetupStatusMsg;
-        hud.setup = `Calibration: ${s.stage.replace('_', ' ')} ${Math.round(s.progress * 100)}% · ${hint(s.hint)}`;
+        const parts = s.parts ? ' · ' + Object.entries(s.parts).map(([k, v]) => `${k} ${v ? '✓' : '✗'}`).join('  ') : '';
+        hud.setup = `Calibration ${Math.round(s.progress * 100)}%: ${hint(s.hint, s)}${parts}`;
         break;
       }
       case 'calibration_done': {
         const c = msg as CalibrationDoneMsg;
         hud.cameraDistanceM = c.distance_m;
-        hud.setup = `Calibrated ✓ distance ${c.distance_m.toFixed(2)} m · camera height ${c.camera_height_m.toFixed(2)} m · tilt ${c.pitch_deg.toFixed(1)}°`;
+        hud.setup = `Calibrated ✓ distance ${c.distance_m.toFixed(2)} m · camera height ${c.camera_height_m.toFixed(2)} m · tilt ${c.pitch_deg.toFixed(1)}°` +
+          (c.partial ? ' (without feet: less accurate)' : '');
         setTimeout(() => { if (hud.setup.startsWith('Calibrated')) hud.setup = ''; }, 6000);
         break;
       }
@@ -119,13 +121,22 @@ const conn = new MspConnection({
   },
 }, platform);
 
-function hint(code: string): string {
+function hint(code: string, s?: SetupStatusMsg): string {
+  const tilt = s?.pitch_deg !== undefined ? ` (now ${s.pitch_deg}°)` : '';
+  const roll = s?.roll_deg !== undefined ? ` (now ${s.roll_deg}°)` : '';
   const map: Record<string, string> = {
+    tilt_down: `the phone points at the ceiling: tilt it down${tilt}`,
+    tilt_up: `the phone points at the floor: tilt it up${tilt}`,
+    level_phone: `the phone is tilted sideways: level it${roll}`,
+    nobody_in_view: 'nobody in view: stand in front of the camera, about 2 m away',
+    face_camera: 'face the camera with head and shoulders visible',
     step_back: 'step back until your whole body is visible',
+    feet_not_visible: 'feet not visible: step back, or stand still to calibrate without feet',
     full_body_not_visible: 'make sure your whole body is visible',
     stand_still: 'stand still, arms relaxed',
     check_phone_angle: 'check the phone angle',
     done: 'done',
+    done_without_feet: 'done (without feet)',
     timeout: 'timed out, try again',
   };
   return map[code] ?? code;
@@ -155,6 +166,11 @@ function frame(): void {
   requestAnimationFrame(frame);
 }
 
+function handsSeen(): string {
+  const n = hud.hands?.hands.length ?? 0;
+  return n === 0 ? 'no hand detected: raise your hands toward the camera' : `${n} hand${n > 1 ? 's' : ''} tracked`;
+}
+
 function thermalNote(): string {
   if (thermal.heat_guard === false) return ' (heat guard off)';
   return (thermal.level ?? 0) > 0 ? ` (phone ${['', 'warm', 'hot', 'critical'][Math.min(thermal.level ?? 0, 3)]}: ${thermal.hands_face})` : '';
@@ -175,7 +191,8 @@ function updateHudLines(): void {
     p && p.head ? `head yaw ${p.head.yawDeg.toFixed(0)}° pitch ${p.head.pitchDeg.toFixed(0)}° roll ${p.head.rollDeg.toFixed(0)}°` : 'head –',
     p ? `root x ${(p.rootMm[0] / 1000).toFixed(2)} z ${(p.rootMm[2] / 1000).toFixed(2)} m` : '',
     `send delay on phone ${latest ? fmt(latest.sendDelayUs / 1000) : '–'} ms`,
-    hud.hands ? `hands ${handsRate.rate} fps · age p50 ${fmt(handsAgeMs.p(0.5))} ms${thermalNote()}` : `hands: none received${thermalNote()}`,
+    thermal.hands_on === false ? 'hands: switched OFF on the phone (Hands button)'
+      : hud.hands ? `hands ${handsRate.rate} fps · ${handsSeen()}${thermalNote()}` : `hands: none received${thermalNote()}`,
     hud.face ? `face ${faceRate.rate} fps · ${hud.face.found ? hud.face.expression : 'not found'}${thermalNote()}` : `face: none received${thermalNote()}`,
     'keys: C/red = calibrate · Back = reconnect panel',
   ];

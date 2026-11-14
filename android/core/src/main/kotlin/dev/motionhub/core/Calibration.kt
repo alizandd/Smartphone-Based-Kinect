@@ -14,6 +14,8 @@ data class CalibrationResult(
     val kScale: Double?,
     val pitchDeg: Double,
     val rollDeg: Double,
+    /** True when calibrated from the upper body only (feet were not visible): less accurate. */
+    val partial: Boolean = false,
 )
 
 object Anthropometry {
@@ -60,19 +62,55 @@ object StatureSolver {
 }
 
 /**
- * Collects still, fully visible frames and solves D/h from their median.
- * Stage hints mirror docs/04 so the TV can show guidance.
+ * Upper-body fallback when the feet are not visible (small room, phone on a desk): distance from
+ * the vertical size of the torso (shoulder line → hip line ≈ 0.288 × stature), camera height from
+ * the eye ray. Less accurate than [StatureSolver] (posture and torso proportions vary).
  */
-class Calibrator(private val cam: CameraModel, val statureM: Double, private val samplesNeeded: Int = 90) {
+object UpperBodySolver {
+    const val TORSO_RATIO = 0.288
+
+    fun solve(cam: CameraModel, f: PoseFrame, statureM: Double): StatureSolver.Solution? {
+        val sh = f.meanPx(BP.LEFT_SHOULDER, BP.RIGHT_SHOULDER) ?: return null
+        val hp = f.meanPx(BP.LEFT_HIP, BP.RIGHT_HIP) ?: return null
+        val eye = f.meanPx(BP.LEFT_EYE, BP.RIGHT_EYE) ?: return null
+        val rs = cam.rayG(sh.first, sh.second)
+        val rh = cam.rayG(hp.first, hp.second)
+        val re = cam.rayG(eye.first, eye.second)
+        val dTan = cam.tanElevation(rs) - cam.tanElevation(rh)
+        if (dTan <= 0.01) return null
+        val d = TORSO_RATIO * statureM / dTan
+        val h = Anthropometry.EYE_HEIGHT_RATIO * statureM - d * cam.tanElevation(re)
+        if (d !in 0.4..8.0 || h !in 0.05..3.0) return null
+        val hip = cam.atDepth(rh, d) ?: return null
+        return StatureSolver.Solution(d, h, Vec3(hip.x, -h, hip.z))
+    }
+}
+
+/**
+ * Collects still frames and solves distance and camera height from their median (docs/04).
+ * Hints say what to fix, in priority order: phone level/tilt, nobody in view, face the camera,
+ * feet visible. With the upper body only, it calibrates anyway after [samplesNeeded] still frames
+ * (result marked partial).
+ */
+class Calibrator(private val cam: CameraModel, val statureM: Double, private val samplesNeeded: Int = 60) {
     enum class Stage { VISIBILITY, STAND_STILL, DONE, FAILED }
 
-    data class Status(val stage: Stage, val progress: Double, val hint: String)
+    data class Status(
+        val stage: Stage,
+        val progress: Double,
+        val hint: String,
+        /** What the camera sees: head, shoulders, hips, knees, feet. */
+        val parts: Map<String, Boolean> = emptyMap(),
+    )
 
-    private val dSamples = ArrayList<Double>()
-    private val hSamples = ArrayList<Double>()
-    private val xSamples = ArrayList<Double>()
-    private val zSamples = ArrayList<Double>()
-    private val torsoSamples = ArrayList<Double>()
+    private class Samples {
+        val d = ArrayList<Double>(); val h = ArrayList<Double>(); val x = ArrayList<Double>(); val z = ArrayList<Double>()
+        val torso = ArrayList<Double>()
+        fun add(s: StatureSolver.Solution, torsoPx: Double?) { d += s.distanceM; h += s.cameraHeightM; x += s.footG.x; z += s.footG.z; torsoPx?.let { torso += it } }
+    }
+
+    private val full = Samples()
+    private val upper = Samples()
     private val window = ArrayDeque<DoubleArray>()
     private var framesSeen = 0
     var result: CalibrationResult? = null; private set
@@ -82,58 +120,74 @@ class Calibrator(private val cam: CameraModel, val statureM: Double, private val
         framesSeen++
         if (framesSeen > 60 * 60) return Status(Stage.FAILED, progress(), "timeout")
 
-        val foot = footContactPx(f)
-        val eye = f.meanPx(BP.LEFT_EYE, BP.RIGHT_EYE)
-        val visibleKeys = f.keyJointsVisible()
-        if (foot == null || eye == null || visibleKeys < BP.KEY_JOINTS.size - 1) {
-            window.clear()
-            val hint = when {
-                foot == null || (foot.second > f.height * 0.97) -> "step_back"
-                eye == null || eye.second < f.height * 0.03 -> "step_back"
-                else -> "full_body_not_visible"
-            }
-            return Status(Stage.VISIBILITY, progress(), hint)
-        }
-
-        // Stillness: key points move less than 1.5% of body pixel height over a 20-frame window.
-        val bodyPx = max(1.0, foot.second - eye.second)
-        val probe = doubleArrayOf(
-            f.u(BP.LEFT_WRIST), f.v(BP.LEFT_WRIST), f.u(BP.RIGHT_WRIST), f.v(BP.RIGHT_WRIST),
-            foot.first, foot.second, eye.first, eye.second,
+        val parts = linkedMapOf(
+            "head" to (f.visible(BP.NOSE) || f.visible(BP.LEFT_EYE) || f.visible(BP.RIGHT_EYE)),
+            "shoulders" to (f.visible(BP.LEFT_SHOULDER) && f.visible(BP.RIGHT_SHOULDER)),
+            "hips" to (f.visible(BP.LEFT_HIP) && f.visible(BP.RIGHT_HIP)),
+            "knees" to (f.visible(BP.LEFT_KNEE) || f.visible(BP.RIGHT_KNEE)),
+            "feet" to (footContactPx(f) != null && (f.visible(BP.LEFT_ANKLE) || f.visible(BP.RIGHT_ANKLE))),
         )
+        fun vis(hint: String) = Status(Stage.VISIBILITY, progress(), hint, parts).also { window.clear() }
+
+        // 1. Phone placement (measured by the gravity sensor).
+        if (kotlin.math.abs(cam.rollDeg) > 12) return vis("level_phone")
+        if (cam.pitchDeg > 25) return vis("tilt_down")
+        if (cam.pitchDeg < -40) return vis("tilt_up")
+        // 2. Is someone there, facing the camera?
+        if (f.keyJointsVisible() < 4) return vis("nobody_in_view")
+        val eye = f.meanPx(BP.LEFT_EYE, BP.RIGHT_EYE)
+        if (eye == null || !parts.getValue("shoulders")) return vis("face_camera")
+        val fullBody = parts.getValue("feet") && f.keyJointsVisible() >= BP.KEY_JOINTS.size - 1
+        val upperBody = parts.getValue("hips")
+        if (!fullBody && !upperBody) return vis("step_back")
+
+        // 3. Stillness: key points move less than 1.5% of the body's pixel size over 20 frames.
+        val sh = f.meanPx(BP.LEFT_SHOULDER, BP.RIGHT_SHOULDER)!!
+        val hp = f.meanPx(BP.LEFT_HIP, BP.RIGHT_HIP)!!
+        val sizePx = max(1.0, kotlin.math.hypot(hp.first - sh.first, hp.second - sh.second) * (if (fullBody) 3.5 else 1.0))
+        val probe = doubleArrayOf(f.u(BP.LEFT_WRIST), f.v(BP.LEFT_WRIST), f.u(BP.RIGHT_WRIST), f.v(BP.RIGHT_WRIST),
+            sh.first, sh.second, hp.first, hp.second, eye.first, eye.second)
         window.addLast(probe)
         if (window.size > 20) window.removeFirst()
-        if (window.size < 20) return Status(Stage.STAND_STILL, progress(), "stand_still")
+        val hintMoving = if (fullBody) "stand_still" else "feet_not_visible"
+        if (window.size < 20) return Status(Stage.STAND_STILL, progress(), hintMoving, parts)
         var maxRange = 0.0
         for (k in probe.indices) {
             var lo = Double.MAX_VALUE; var hi = -Double.MAX_VALUE
             for (s in window) { lo = minOf(lo, s[k]); hi = maxOf(hi, s[k]) }
             maxRange = max(maxRange, hi - lo)
         }
-        if (maxRange > 0.015 * bodyPx) return Status(Stage.STAND_STILL, progress(), "stand_still")
+        if (maxRange > 0.015 * sizePx * (if (fullBody) 1.0 else 3.0)) return Status(Stage.STAND_STILL, progress(), hintMoving, parts)
 
-        val sol = StatureSolver.solve(cam, foot.first, foot.second, eye.first, eye.second, statureM)
-            ?: return Status(Stage.STAND_STILL, progress(), "check_phone_angle")
-        dSamples += sol.distanceM; hSamples += sol.cameraHeightM
-        xSamples += sol.footG.x; zSamples += sol.footG.z
-        torsoPx(f)?.let { torsoSamples += it }
-
-        if (dSamples.size >= samplesNeeded) {
-            val d = median(dSamples)
-            val h = median(hSamples)
-            result = CalibrationResult(
-                statureM = statureM,
-                cameraHeightM = h,
-                distanceM = d,
-                originG = Vec3(median(xSamples), -h, median(zSamples)),
-                kScale = if (torsoSamples.size > samplesNeeded / 2) d * median(torsoSamples) else null,
-                pitchDeg = cam.pitchDeg,
-                rollDeg = cam.rollDeg,
-            )
-            return Status(Stage.DONE, 1.0, "done")
+        // 4. Solve and collect.
+        if (fullBody) {
+            val foot = footContactPx(f)!!
+            val sol = StatureSolver.solve(cam, foot.first, foot.second, eye.first, eye.second, statureM)
+                ?: return Status(Stage.STAND_STILL, progress(), "check_phone_angle", parts)
+            full.add(sol, torsoPx(f))
+        } else {
+            val sol = UpperBodySolver.solve(cam, f, statureM)
+                ?: return Status(Stage.STAND_STILL, progress(), "check_phone_angle", parts)
+            upper.add(sol, torsoPx(f))
         }
-        return Status(Stage.STAND_STILL, progress(), "stand_still")
+        val done = when {
+            full.d.size >= samplesNeeded -> full to false
+            upper.d.size >= samplesNeeded * 3 / 2 -> upper to true      // needs longer: noisier
+            else -> null
+        }
+        if (done != null) {
+            val (s, partial) = done
+            val d = median(s.d); val h = median(s.h)
+            result = CalibrationResult(
+                statureM = statureM, cameraHeightM = h, distanceM = d,
+                originG = Vec3(median(s.x), -h, median(s.z)),
+                kScale = if (s.torso.size > s.d.size / 2) d * median(s.torso) else null,
+                pitchDeg = cam.pitchDeg, rollDeg = cam.rollDeg, partial = partial,
+            )
+            return Status(Stage.DONE, 1.0, if (partial) "done_without_feet" else "done", parts)
+        }
+        return Status(Stage.STAND_STILL, progress(), hintMoving, parts)
     }
 
-    private fun progress() = dSamples.size.toDouble() / samplesNeeded
+    private fun progress() = max(full.d.size.toDouble() / samplesNeeded, upper.d.size.toDouble() / (samplesNeeded * 3 / 2)).coerceAtMost(1.0)
 }

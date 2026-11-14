@@ -127,6 +127,8 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
 
     // ---- settings ----
     var statureCm = 175; private set
+    /** Track with the front (selfie) camera: the phone faces the player, who can see its screen. */
+    @Volatile var frontCamera = false; private set
     private var modelIndex = 1
     private var resIndex = 1
     private var delegateIndex = 0
@@ -194,6 +196,7 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
         resIndex = prefs.getInt("res", 1)
         delegateIndex = prefs.getInt("delegate", 0)
         heatGuard = prefs.getBoolean("heat_guard", true)
+        frontCamera = prefs.getBoolean("front_camera", false)
         pipeline.statureM = statureCm / 100.0
 
         server = newServer()
@@ -214,10 +217,11 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
         for (type in intArrayOf(Sensor.TYPE_ACCELEROMETER, Sensor.TYPE_GYROSCOPE))
             sm.getDefaultSensor(type)?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
 
-        if (prefs.getBoolean("hands", false)) setHands(true)
+        if (prefs.getBoolean("hands", true)) setHands(true)
         if (prefs.getBoolean("face", false)) setFace(true)
         engine = newEngine()
         camera = CameraController(ctx, owner, ::analyze)
+        camera.frontCamera = frontCamera
         appliedResIndex = resIndex
         camera.analysisSize = resolutions[resIndex]
         camera.targetRotation = displayRotation()
@@ -272,6 +276,11 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
         extras["hands"]?.let { e.putBoolean("hands", it == "on") }
         extras["face"]?.let { e.putBoolean("face", it == "on") }
         e.apply()
+        // The engine may already be running (activity re-launched): apply the toggles live too.
+        if (started) {
+            extras["hands"]?.let { v -> main.post { setHands(v == "on") } }
+            extras["face"]?.let { v -> main.post { setFace(v == "on") } }
+        }
     }
 
     // ------------------------------------------------------------------ camera thread
@@ -348,10 +357,13 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
         var sent = 0
         var tSend = 0L
         var tracking = 0
-        val out = if (f == null) null else synchronized(pipeline) {
+        // While calibrating, frames with nobody in them still go through the calibrator so the TV
+        // gets placement hints ("tilt the phone down", "nobody in view") instead of silence.
+        val input = f ?: if (pipeline.isCalibrating) dev.motionhub.core.PoseFrame.empty(r.tCaptureUs, r.width, r.height) else null
+        val out = if (input == null) null else synchronized(pipeline) {
             val g = gravity
-            pipeline.camera.setGravityDevice(g[0].toDouble(), g[1].toDouble(), g[2].toDouble())
-            pipeline.process(f)
+            pipeline.camera.setGravityDevice(g[0].toDouble(), g[1].toDouble(), g[2].toDouble(), frontCamera)
+            pipeline.process(input)
         }
         out?.skeleton?.let { s ->
             lastDistance = s.distanceM
@@ -378,7 +390,7 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
             lastStatus = "${st.stage.name.lowercase()} ${(st.progress * 100).toInt()}% ${st.hint}"
             if (r.tCaptureUs - lastStatusSentUs > 200_000) {
                 lastStatusSentUs = r.tCaptureUs
-                server.broadcastText(MspJson.setupStatus(st))
+                server.broadcastText(MspJson.setupStatus(st, pipeline.camera.pitchDeg, pipeline.camera.rollDeg))
             }
             if (st.stage == Calibrator.Stage.FAILED) toast("Calibration failed: ${st.hint}")
         }
@@ -471,6 +483,18 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
         engine = newEngine()
         main.postDelayed({ old?.close() }, 500)
         main.postDelayed({ writeMeta() }, 600)
+    }
+
+    /** Switch between the rear and the front camera; the calibration no longer applies. */
+    fun toggleCamera() {
+        frontCamera = !frontCamera
+        prefs.edit().putBoolean("front_camera", frontCamera).apply()
+        synchronized(pipeline) { pipeline.clearCalibration() }
+        intrinsicsSet = false
+        lastStatus = "not calibrated (camera switched)"
+        camera.frontCamera = frontCamera
+        camera.start(withVideo = camera.recordingEnabled) { toast(it) }
+        main.postDelayed({ applyExposure(); writeMeta() }, 1000)
     }
 
     fun cycleResolution() {
@@ -623,7 +647,7 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
 
     fun hudText(): String {
         val g = gravity
-        synchronized(pipeline) { pipeline.camera.setGravityDevice(g[0].toDouble(), g[1].toDouble(), g[2].toDouble()) }
+        synchronized(pipeline) { pipeline.camera.setGravityDevice(g[0].toDouble(), g[1].toDouble(), g[2].toDouble(), frontCamera) }
         val ip = localIp() ?: "no Wi-Fi"
         val cal = pipeline.calibration
         return buildString {
@@ -725,6 +749,7 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
         put("pose_fps_cap", if (thermalLevel >= 2) 15 else 30)
         put("hands_face", handFaceLabel(thermalLevel))
         put("resolution", resLabelFor(if (appliedResIndex >= 0) appliedResIndex else resIndex))
+        put("hands_on", handsOn); put("face_on", faceOn); put("front_camera", frontCamera)
     })
 
     private fun resLabelFor(i: Int) = resolutions[i].let { "${it.width}x${it.height}" }

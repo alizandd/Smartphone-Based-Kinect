@@ -57,6 +57,12 @@ class PoseFrame(
         require(world == null || world.size == BP.COUNT * 3)
     }
 
+    companion object {
+        /** A frame with no person in it (the pose model found nobody). */
+        fun empty(tUs: Long, width: Int, height: Int) =
+            PoseFrame(tUs, width, height, FloatArray(BP.COUNT * 2) { Float.NaN }, FloatArray(BP.COUNT), null)
+    }
+
     fun visible(i: Int, minVis: Float = 0.5f) = vis[i] >= minVis && !px[2 * i].isNaN()
     fun u(i: Int) = px[2 * i].toDouble()
     fun v(i: Int) = px[2 * i + 1].toDouble()

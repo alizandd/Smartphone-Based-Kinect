@@ -113,9 +113,12 @@ export interface GestureMsg {
 export interface ProbeMsg { type: 'probe'; t_source_us: number; luma: number }
 export interface PongMsg { type: 'pong'; t0: number; t1: number; t2: number }
 export interface WelcomeMsg { type: 'welcome'; session_id: string; device_model: string; sensor_version: string }
-export interface SetupStatusMsg { type: 'setup_status'; stage: string; progress: number; hint: string }
+export interface SetupStatusMsg {
+  type: 'setup_status'; stage: string; progress: number; hint: string;
+  parts?: Record<string, boolean>; pitch_deg?: number; roll_deg?: number;
+}
 export interface CalibrationDoneMsg {
-  type: 'calibration_done'; stature_m: number; camera_height_m: number; distance_m: number; pitch_deg: number; roll_deg: number;
+  type: 'calibration_done'; stature_m: number; camera_height_m: number; distance_m: number; pitch_deg: number; roll_deg: number; partial?: boolean;
 }
 export interface WristInfo { up_down_deg: number; left_right_deg: number; flex_deg: number; deviation_deg: number; palm: string }
 export interface HandInfo { side: 'l' | 'r'; shape: string; raw_shape: string; conf: number; box: [number, number, number]; pts: number[]; wrist?: WristInfo }

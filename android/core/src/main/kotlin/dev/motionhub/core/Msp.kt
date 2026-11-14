@@ -134,11 +134,14 @@ object MspJson {
         put("type", "probe"); put("t_source_us", tSourceUs); put("luma", luma)
     }.toString()
 
-    fun setupStatus(s: Calibrator.Status): String = buildJsonObject {
+    fun setupStatus(s: Calibrator.Status, pitchDeg: Double = Double.NaN, rollDeg: Double = Double.NaN): String = buildJsonObject {
         put("type", "setup_status")
         put("stage", s.stage.name.lowercase())
         put("progress", s.progress)
         put("hint", s.hint)
+        putJsonObject("parts") { s.parts.forEach { (k, v) -> put(k, v) } }
+        if (!pitchDeg.isNaN()) put("pitch_deg", Math.round(pitchDeg).toInt())
+        if (!rollDeg.isNaN()) put("roll_deg", Math.round(rollDeg).toInt())
     }.toString()
 
     fun calibrationDone(c: CalibrationResult): String = buildJsonObject {
@@ -148,6 +151,7 @@ object MspJson {
         put("distance_m", c.distanceM)
         put("pitch_deg", c.pitchDeg)
         put("roll_deg", c.rollDeg)
+        put("partial", c.partial)
     }.toString()
 
     fun sensor(event: String, detail: JsonObject = JsonObject(emptyMap())): String = buildJsonObject {

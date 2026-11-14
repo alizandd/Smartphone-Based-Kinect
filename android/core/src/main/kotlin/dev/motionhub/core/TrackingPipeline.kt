@@ -37,6 +37,12 @@ class TrackingPipeline(statureM: Double = 1.75) {
         gestures.reset()
     }
 
+    /** Forget the calibration (e.g. the camera was switched or moved). */
+    fun clearCalibration() {
+        builder.calibration = null
+        gestures.reset()
+    }
+
     val isCalibrating get() = calibrator != null
 
     fun process(f: PoseFrame): Output {
