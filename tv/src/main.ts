@@ -210,11 +210,19 @@ async function scan(): Promise<void> {
   if (found) connectTo(found); else statusEl.textContent = 'No sensor found. Is the phone app open and on the same Wi-Fi?';
 }
 
+// Android TV shell status line (e.g. Bluetooth fallback progress).
+(window as unknown as { motionhubStatus: (t: string) => void }).motionhubStatus = (t: string) => {
+  if (state === 'connected' && t) return;
+  hud.setup = t;
+  statusEl.textContent = t;
+};
+
 // Android TV shell pushes NSD results here.
 window.motionhubOnPhones = (json: string) => {
   try {
     const phones = JSON.parse(json) as PhoneCandidate[];
-    if (phones.length && state === 'idle') connectTo(phones[0].host, phones[0].port);
+    // Switch to a working candidate unless already connected (e.g. Wi-Fi blocked → Bluetooth).
+    if (phones.length && state !== 'connected') connectTo(phones[0].host, phones[0].port);
     else if (phones.length) statusEl.textContent = `found ${phones.map((p) => p.name).join(', ')}`;
   } catch { /* ignore */ }
 };

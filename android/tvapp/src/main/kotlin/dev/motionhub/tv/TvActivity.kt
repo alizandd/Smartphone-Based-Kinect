@@ -37,6 +37,9 @@ class TvActivity : Activity() {
     private val resolveQueue = ArrayDeque<NsdServiceInfo>()
     private var resolving = false
     private var lastBack = 0L
+    private var btLink: BtLink? = null
+    @Volatile private var wifiReachable = false
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -76,10 +79,39 @@ class TvActivity : Activity() {
         }
         nsd = getSystemService(Context.NSD_SERVICE) as NsdManager
         nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discovery)
+
+        // Bluetooth fallback: if no phone is reachable over Wi-Fi within 6 s, connect over Bluetooth.
+        val btPerms = arrayOf(android.Manifest.permission.BLUETOOTH_SCAN, android.Manifest.permission.BLUETOOTH_CONNECT)
+        if (btPerms.any { checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED }) requestPermissions(btPerms, 1)
+        main.postDelayed({ if (!wifiReachable) startBluetooth() }, 6000)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (!wifiReachable) startBluetooth()
+    }
+
+    private fun startBluetooth() {
+        if (btLink != null) return
+        if (checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            status("Bluetooth permission needed for the fallback connection"); return
+        }
+        btLink = BtLink(this, onReady = { name ->
+            phones.removeAll { it.optString("via") == "bluetooth" }
+            phones.add(JSONObject().put("name", "$name (Bluetooth)").put("host", "127.0.0.1").put("port", BtLink.LOCAL_PORT).put("via", "bluetooth"))
+            status("")
+            pushPhones()
+        }, onStatus = { status(it) }).also { it.start() }
+    }
+
+    private fun status(text: String) {
+        val t = JSONObject.quote(text)
+        runOnUiThread { web.evaluateJavascript("window.motionhubStatus && window.motionhubStatus($t)", null) }
     }
 
     override fun onDestroy() {
         runCatching { nsd.stopServiceDiscovery(discovery) }
+        btLink?.stop()
         multicastLock?.release()
         wifiLock?.release()
         web.destroy()
@@ -138,10 +170,23 @@ class TvActivity : Activity() {
             override fun onServiceResolved(info: NsdServiceInfo) {
                 val host = info.host?.hostAddress
                 if (host != null && info.host is Inet4Address) {
-                    phones.removeAll { it.optString("name") == info.serviceName }
-                    phones.add(JSONObject().put("name", info.serviceName).put("host", host).put("port", info.port))
-                    Log.i(TAG, "phone ${info.serviceName} at $host:${info.port}")
-                    pushPhones()
+                    // Only offer the phone if its port is actually reachable: on networks with
+                    // Wi-Fi client isolation discovery works but the connection is blocked.
+                    Thread {
+                        val ok = runCatching {
+                            java.net.Socket().use { it.connect(java.net.InetSocketAddress(host, info.port), 1500) }; true
+                        }.getOrDefault(false)
+                        Log.i(TAG, "phone ${info.serviceName} at $host:${info.port} reachable=$ok")
+                        if (ok) {
+                            wifiReachable = true
+                            phones.removeAll { it.optString("name") == info.serviceName }
+                            phones.add(0, JSONObject().put("name", info.serviceName).put("host", host).put("port", info.port).put("via", "wifi"))
+                            pushPhones()
+                        } else {
+                            status("Phone found on the network but Wi-Fi blocks the connection: using Bluetooth")
+                            main.post { startBluetooth() }
+                        }
+                    }.start()
                 }
                 resolveNext()
             }

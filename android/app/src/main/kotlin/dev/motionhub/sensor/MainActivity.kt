@@ -48,6 +48,7 @@ class MainActivity : AppCompatActivity(), EngineUi {
             pendingOverrides?.let { e.applyOverrides(it); pendingOverrides = null }
             e.ui = this@MainActivity
             e.attachPreview(previewView.surfaceProvider)
+            e.startBluetooth()
             refreshButtons()
         }
         override fun onServiceDisconnected(name: ComponentName) { engine = null }
@@ -62,7 +63,11 @@ class MainActivity : AppCompatActivity(), EngineUi {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The sensor screen stays on while the app is open; it dims itself after 30 s without a
+        // touch (less heat), and a touch brightens it again.
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_main)
+        scheduleDim()
         previewView = findViewById<PreviewView>(R.id.preview).apply { scaleType = PreviewView.ScaleType.FIT_CENTER }
         overlay = findViewById(R.id.overlay)
         hud = findViewById(R.id.hud)
@@ -73,6 +78,8 @@ class MainActivity : AppCompatActivity(), EngineUi {
         val needed = buildList {
             add(Manifest.permission.CAMERA)
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+            add(Manifest.permission.BLUETOOTH_CONNECT)
+            add(Manifest.permission.BLUETOOTH_ADVERTISE)
         }.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (needed.isEmpty()) startAndBind() else ActivityCompat.requestPermissions(this, needed.toTypedArray(), 1)
 
@@ -85,6 +92,7 @@ class MainActivity : AppCompatActivity(), EngineUi {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) startAndBind()
         else toast("Camera permission is required")
+        engine?.startBluetooth()
     }
 
     /** The service must be started while this activity is visible (Android's background-camera rule). */
@@ -98,6 +106,16 @@ class MainActivity : AppCompatActivity(), EngineUi {
         super.onNewIntent(intent)
         val extras = intent.extras?.let { b -> b.keySet().associateWith { b.getString(it) ?: "" } }
         if (!extras.isNullOrEmpty()) { engine?.applyOverrides(extras); toast("Settings saved; restart the sensor to apply camera changes") }
+    }
+
+    // ---- screen: always on, auto-dim after 30 s without interaction ----
+    private val dimRunnable = Runnable { setBrightness(0.02f) }
+    private fun scheduleDim() { ui.removeCallbacks(dimRunnable); ui.postDelayed(dimRunnable, 30_000) }
+    private fun setBrightness(v: Float) { window.attributes = window.attributes.apply { screenBrightness = v } }
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        setBrightness(-1f)    // back to the system brightness
+        scheduleDim()
     }
 
     override fun onStart() {
@@ -152,6 +170,12 @@ class MainActivity : AppCompatActivity(), EngineUi {
                 .setNegativeButton("Cancel", null).show()
             else e.setHeatGuard(true)
         }
+        add("bluetooth") {
+            // Make the phone visible so the TV can find it the first time (it remembers it afterwards).
+            it.startBluetooth()
+            startActivity(android.content.Intent(android.bluetooth.BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
+                .putExtra(android.bluetooth.BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300))
+        }
         add("background") { moveTaskToBack(true) }
         add("stop") {
             startService(Intent(this, SensorService::class.java).setAction(SensorService.ACTION_STOP))
@@ -174,6 +198,7 @@ class MainActivity : AppCompatActivity(), EngineUi {
         set("height", "Height: ${e?.statureCm ?: "…"} cm")
         set("probe", if (e?.probeEnabled == true) "Probe: ON" else "Probe: off")
         set("heat", if (e?.heatGuard == false) "Heat guard: OFF" else "Heat guard: on")
+        set("bluetooth", if ((e?.bluetoothSessions ?: 0) > 0) "TV via Bluetooth ✓" else "Pair TV (Bluetooth)")
         set("background", "Run in background")
         set("stop", "Stop sensor")
     }

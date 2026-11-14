@@ -102,6 +102,10 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
         logger.event(MspJson.sensor("server_restarted", buildJsonObject { put("reason", reason) }))
     }
     private val nsd = NsdAdvertiser(ctx)
+    private val bt = BtBridge(ctx, MspServer.PORT)
+    val bluetoothSessions: Int get() = bt.sessions
+    /** (Re)start the Bluetooth listener, e.g. after the user granted the permission. */
+    fun startBluetooth(): Boolean = bt.start()
     private var wifiLock: WifiManager.WifiLock? = null
     private var wifiLockScreenOff: WifiManager.WifiLock? = null
 
@@ -196,6 +200,7 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
         server.start()
         healthExecutor.scheduleWithFixedDelay({ checkServerHealth() }, 5, 5, java.util.concurrent.TimeUnit.SECONDS)
         nsd.register(MspServer.PORT)
+        bt.start()
         val wifi = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         wifiLock = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "motionhub").apply { acquire() }
         // Low-latency mode only applies while the screen is on; keep Wi-Fi out of power-save when it is off.
@@ -240,6 +245,7 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
         handTracker?.close()
         faceTracker?.close()
         nsd.unregister()
+        bt.stop()
         runCatching { server.stop(500) }
         wifiLock?.release()
         wifiLockScreenOff?.release()
@@ -621,7 +627,8 @@ class SensorEngine(private val ctx: Context, private val owner: LifecycleOwner) 
         val ip = localIp() ?: "no Wi-Fi"
         val cal = pipeline.calibration
         return buildString {
-            appendLine("ws://$ip:${MspServer.PORT}${MspServer.PATH}   TV clients: $clients")
+            appendLine("ws://$ip:${MspServer.PORT}${MspServer.PATH}   TV clients: $clients" +
+                if (bt.sessions > 0) " (${bt.sessions} via Bluetooth)" else "")
             appendLine("cam ${fmt(camFps.rate)} fps ($intrinsicsKey)   pose ${fmt(poseFps.rate)} fps   ${engine?.model}/${engine?.delegate}")
             appendLine("inference p50 ${fmt(inferenceMs.p(0.5))} p95 ${fmt(inferenceMs.p(0.95))} ms")
             appendLine("capture→result p50 ${fmt(captureToResultMs.p(0.5))} ms")
